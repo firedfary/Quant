@@ -1,0 +1,88 @@
+# ==========================================
+# Python 编译与运行缓存
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ==========================================
+# 虚拟环境 (Virtual Environments)
+# ==========================================
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# ==========================================
+# 量化交易运行时数据与数据库 (Local Runtime & DB)
+# 保护个人模拟/实盘账户流水、持仓及本地行情缓存
+# ==========================================
+data/*.db
+data/*.sqlite3
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/cache/
+data/*.csv
+data/*.png
+
+# 保持目录结构
+!data/.gitkeep
+
+# ==========================================
+# 运行时日志 (Logs)
+# ==========================================
+logs/*
+*.log
+!logs/.gitkeep
+
+# ==========================================
+# 环境变量与机密配置 (Secrets & Configs)
+# ==========================================
+.env
+.env.*
+*.key
+*.pem
+*.token
+
+# ==========================================
+# IDE 与 编辑器配置 (Editor & IDE)
+# ==========================================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+
+# ==========================================
+# 操作系统生成文件 (OS Generated)
+# ==========================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ==========================================
+# AI 工具临时状态 (AI Tooling)
+# ==========================================
+.gemini/
