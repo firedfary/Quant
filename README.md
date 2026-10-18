@@ -1,127 +1,123 @@
-# 20,000 元模拟资金量化交易系统 (A股 / ETF 专版)
+# 多市场量化交易系统 (A股 / 场内ETF & 币安加密货币双子系统)
 
-一套专为小资金（20,000 元初始本金）精细化设计的事件驱动型量化交易系统。
-系统内嵌**真实市场交易规则**（A股/ETF T+1、最小100股整手、滑点、佣金、印花税及过户费），提供从**历史数据回测**、**风险控制**到**实盘行情毫秒级模拟撮合**的全流程闭环。
+基于**模块化单仓库（Modular Monorepo / Adapter Pattern）**架构设计的跨市场量化交易系统。
+系统抽离中立通用的事件驱动回测引擎、模拟盘引擎、风控防线与账户模型，并通过适配器分别接入 **A 股/场内 ETF 市场** 与 **币安（Binance）加密货币市场**。
 
 ---
 
-## 一、 系统架构设计
+## 一、 系统架构全景
 
 ```
 d:/Quant/
-├── .venv/                    # 项目独立虚拟环境 (Python 3.12)
-├── config.py                 # 全局配置 (2万元初始本金、税费率、T+1、滑点、标的池)
+├── .env                      # 私密配置 (Binance API Key/Secret, 代理端口 - 严禁提交)
+├── .env.example              # 环境变量配置模板
+├── config.py                 # 全局配置中枢与多市场配置路由
 ├── requirements.txt          # 项目依赖清单
-├── core/                     # 核心底层引擎
-│   ├── account.py            # 模拟账户与资金管理 (现金、持仓、浮动盈亏、T+1锁定与日终结算)
-│   ├── broker.py             # 模拟撮合经纪商 (买卖撮合、印花税/佣金/过户费、滑点模型)
-│   ├── data_feed.py          # 行情中枢 (腾讯金融实时秒级行情 + AkShare日K线与本地缓存)
-│   ├── risk_manager.py       # 风控防线 (单标的仓位上限60%、8%硬止损、15%账户回撤熔断)
-│   └── storage.py            # SQLite 数据持久化 (账户状态、持仓表、成交流水表、净值快照)
-├── strategies/               # 经典成熟量化算法
-│   ├── base.py               # 策略抽象基类与标准化信号定义 (Signal)
-│   ├── dual_ma_trend.py      # 策略1：EMA 趋势双均线突破策略 + ATR 动态追踪止损
-│   ├── grid_trading.py       # 策略2：自适应 ETF 动态网格交易策略 (震荡市高胜率套利)
-│   └── momentum_rotation.py  # 策略3：核心多资产 ETF 动量轮动策略 (Gary Antonacci 双动量模型)
-├── engines/                  # 运行引擎
-│   ├── backtest_engine.py    # 事件驱动型历史回测引擎 (计算年化、夏普、最大回撤、胜率并出图)
-│   └── paper_engine.py       # 实盘模拟盘引擎 (盘中实时巡检、信号撮合、T+1日终结算)
-├── main.py                   # 交互式综合控制台 (查看资产、回测、单步模拟、自动盯盘)
-├── run_backtest.py           # 策略回测快速启动脚本
-├── run_paper_trade.py        # 模拟实盘快速启动脚本
-└── data/                     # 数据与图表存储 (SQLite 数据库、K线缓存、回测净值图)
+│
+├── core/                     # 【通用核心内核】完全独立于具体市场
+│   ├── base_broker.py        # 撮合经纪商抽象基类 (约定费用计算、买入、卖出接口)
+│   ├── base_data_feed.py     # 行情数据抽象基类 (约定实时行情、历史K线接口)
+│   ├── account.py            # 通用账户与持仓模型 (支持浮点数仓位、CNY/USDT 货币显示)
+│   ├── risk_manager.py       # 通用风控防线 (单标的仓位上限、硬止损、账户回撤熔断)
+│   └── storage.py            # SQLite 数据持久化 (支持多数据库隔离)
+│
+├── markets/                  # 【市场适配器层】隔离具体市场的交易规则与行情源
+│   ├── ashare/               # A 股 / ETF 适配器
+│   │   ├── config.py         # 20,000元初始本金、T+1、100股整手、免印花税/过户费、ETF标的池
+│   │   ├── broker.py         # AshareBroker: 严格执行 T+1 持仓锁定与整手申报撮合
+│   │   └── data_feed.py      # AshareDataFeed: 腾讯金融极速行情 + AkShare日K
+│   └── crypto/               # 币安 (Binance) 加密货币适配器
+│       ├── config.py         # 5,000 USDT初始本金、7x24 T+0、小数位精度、Maker/Taker费率
+│       ├── broker.py         # CryptoBroker: T+0 买入即时可用、浮点数撮合、USDT计价
+│       └── data_feed.py      # CryptoDataFeed: 币安 REST API + HMAC-SHA256 签名 + 代理支持
+│
+├── strategies/               # 【量化算法策略池】
+│   ├── base.py               # 策略抽象基类 (BaseStrategy, Signal)
+│   ├── common/               # 跨市场通用策略 (一套代码两边复用)
+│   │   ├── grid_trading.py   # 自适应网格套利策略 (支持 ETF 整手与 BTC/USDT 浮点小数)
+│   │   └── dual_ma_trend.py  # EMA 趋势突破策略 + ATR 动态追踪止损
+│   ├── ashare/               # A 股特有策略
+│   │   └── momentum_rotation.py # 核心宽基/行业 ETF 动量轮动策略 (Gary Antonacci 双动量)
+│   └── crypto/               # 币圈特有策略
+│       └── bollinger_breakout.py# 布林带通道波动率突破策略 (适配 7x24 高波动率)
+│
+├── engines/                  # 【运行引擎】
+│   ├── backtest_engine.py    # 跨市场事件驱动回测引擎 (年化、夏普、最大回撤、胜率并出图)
+│   └── paper_engine.py       # 跨市场模拟盘引擎 (自动判断开盘时段、信号撮合、数据落盘)
+│
+├── main.py                   # 多市场交互式主控台 (支持按键一键切换市场)
+├── run_backtest.py           # 命令行回测启动脚本 (支持 --market ashare 或 --market crypto)
+├── run_paper_trade.py        # 命令行实盘模拟脚本 (支持 --market ashare 或 --market crypto)
+└── data/                     # 历史数据、数据库与图表存储 (按子目录隔离)
+    ├── ashare/               # A 股数据库与 K 线缓存
+    └── crypto/               # 加密货币数据库与 K 线缓存
 ```
 
 ---
 
-## 二、 针对 20,000 元资金的交易规则与风控设定
+## 二、 市场特性对比矩阵
 
-1. **标的优选（场内核心 ETF）**：
-   * 纳指ETF (`513100`)、沪深300ETF (`510300`)、黄金ETF (`518880`)、创业板ETF (`159915`)、红利ETF (`510880`)。
-   * **免征印花税**（节省 0.05% 成本）；
-   * 单手金额低（几百元即可买一手），非常适合 2 万元进行网格切分或多资产轮动。
-2. **严谨的真实市场拟真机制**：
-   * **T+1 制度**：当日买入的份额 `available_qty` 冻结，需待次日结算后方可卖出；
-   * **一手 100 份整手买入**：资金不足 1 手自动拒绝，不产生碎股；
-   * **交易税费**：佣金万分之 2.5（ETF单笔最低 0.2 元），双向过户费十万分之一；
-   * **成交滑点**：模拟市价买入加价 0.1%，市价卖出减价 0.1%。
-3. **多维资金风控**：
-   * 单标的持仓市值不超过总资产的 **60%**（杜绝单一个股暴雷风险）；
-   * 单标的设置 **-8% 硬止损**（跌破成本 8% 自动市价挂单平仓）；
-   * 账户累计回撤达到 **15%** 时触发自动熔断，暂停新开仓。
-
----
-
-## 三、 三套成熟的量化策略算法
-
-| 策略名称 | 适用市场环境 | 算法原理 |
+| 特性维度 | A 股 / 场内 ETF 子系统 | 币安 (Binance) 加密货币子系统 |
 | :--- | :--- | :--- |
-| **核心 ETF 动量轮动 (`rotation`)** | 牛市 / 震荡向上 / 全球资产轮动 | 依据近 20 个交易日的**夏普型风险调整动量**，轮动持有表现最强的龙头品种；全市场转负时主动空仓持有 100% 现金防守。 |
-| **自适应 ETF 网格交易 (`grid`)** | 箱体震荡 / 底部磨底行情 | 将 2 万元切分为 6-8 份（每格约 2,500 元），设定 1.5% 步长。价格每下跌 1.5% 自动买入 1 格，反弹 1.5% 自动卖出止盈，持续收割震荡利润。 |
-| **EMA 趋势跟踪与动态止损 (`trend`)** | 单边波段趋势行情 | EMA(10) 上穿 EMA(30) 金叉建仓，下穿死叉平仓；叠加 **ATR 真实波动率** 动态上移保护性止损线。 |
+| **基础货币** | 人民币 (CNY)，默认本金 20,000 元 | 泰达币 (USDT)，默认本金 5,000 USDT |
+| **交易时间** | 工作日 9:30-11:30, 13:00-15:00 | **7 × 24 小时全年无休** |
+| **交收制度** | **T+1**（当日买入被锁定，次日可卖） | **T+0**（买入立即可以卖出） |
+| **下单精度** | **整手限制**（必须是 100 股/份的整数倍） | **浮点小数**（如 0.0001 BTC） |
+| **税费结构** | 佣金万 2.5、卖出印花税千 0.5 (ETF免征)、过户费十万分之一 | Maker 0.1%，Taker 0.1% |
+| **数据源** | 腾讯金融实时行情 + AkShare 历史 K 线 | 币安官方 REST API (`/api/v3/klines`) |
 
 ---
 
-## 四、 快速使用指南
+## 三、 快速使用指南
 
-### 1. 激活项目本地环境 (.venv)
-在 PowerShell 或 CMD 中：
+### 1. 激活 Python 环境
 ```powershell
-# 切换到项目目录
 cd d:\Quant
-
-# 激活虚拟环境
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2. 启动交互式控制台
+### 2. 配置币安 API 凭证 (可选代理)
+在项目根目录编辑 `.env` 文件：
+```ini
+BINANCE_API_KEY=your_key_here
+BINANCE_SECRET_KEY=your_secret_here
+# 若国内直连网络受限，可配置本地科学上网代理端口
+BINANCE_PROXY=http://127.0.0.1:7890
+```
+
+### 3. 启动交互式综合控制台
 ```powershell
 python main.py
 ```
-终端将呈现友好操作菜单：
-```text
-==========================================================
-        ★ 开源量化交易系统 (20,000元模拟资金) ★
-==========================================================
-  [1] 查看模拟账户资产与持仓明细 (Account & Holdings)
-  [2] 运行历史策略回测 (Run Strategy Backtests)
-  [3] 执行一次实时模拟盘撮合 (Run Live Paper Trade Step)
-  [4] 启动盘中自动循环监控交易 (Start Live Auto-Trade Loop)
-  [5] 查看历史成交流水记录 (View Order Execution History)
-  [6] 执行 T+1 日终结算 (Daily Settlement)
-  [7] 重置模拟账户为 20,000 元 (Reset Capital)
-  [0] 退出系统 (Exit)
-==========================================================
-```
+* 按 `[M]` 可在 **【A 股 / ETF 量化子系统】** 与 **【币安加密货币量化子系统】** 之间自由切换；
+* 切换后，查看账户、回测策略、实盘模拟均自动路由至当前市场。
 
-### 3. 运行历史回测（命令行模式）
-测试动量轮动策略在过去 1~3 年的收益率与最大回撤：
-```powershell
-python run_backtest.py --strategy rotation --start 20230101
-```
-> 回测完成后，会自动打印年化收益、最大回撤、夏普比率、胜率，并在 `data/backtest_*.png` 生成高清净值曲线走势图。
+### 4. 命令行快捷回测
 
-### 4. 运行实盘模拟盘（命令行模式）
-* **单次巡检撮合**（抓取当前市场真实行情，计算信号并更新账户）：
+* **A 股 ETF 动量轮动策略回测**：
   ```powershell
-  python run_paper_trade.py --strategy rotation
+  python run_backtest.py --market ashare --strategy rotation --start 20230101
   ```
-* **盘中全自动盯盘撮合**（每 60 秒轮询一次，仅在开盘时段执行）：
+* **币安 BTC/USDT 动态网格策略回测**：
   ```powershell
-  python run_paper_trade.py --strategy rotation --loop --interval 60
+  python run_backtest.py --market crypto --strategy grid --symbol BTCUSDT --start 20240101
   ```
-* **收盘 T+1 结算**（将当日买入持仓全部转为次日可用可卖）：
+* **币安 ETH/USDT 布林带突破策略回测**：
   ```powershell
-  python run_paper_trade.py --settle
+  python run_backtest.py --market crypto --strategy bollinger --symbol ETHUSDT --start 20240101
   ```
 
----
+### 5. 命令行快捷模拟实盘
 
-## 五、 数据与记录存储
-
-* 数据库位置：`d:/Quant/data/quant_trading.db`
-* 包含数据表：
-  * `account`：资金总额、可用现金、已实现盈亏；
-  * `positions`：当前持仓代码、持仓量、可用量、成本价、现价、浮动盈亏；
-  * `orders`：所有委托成交流水（成交时间、成交价、手续费明细、策略备注）；
-  * `daily_snapshots`：每日收盘净值序列，支持随时复盘收益曲线。
+* **A 股单次巡检撮合**：
+  ```powershell
+  python run_paper_trade.py --market ashare --strategy rotation
+  ```
+* **币安加密货币单次巡检撮合**：
+  ```powershell
+  python run_paper_trade.py --market crypto --strategy grid --symbol BTCUSDT
+  ```
+* **币安加密货币 7x24 循环监控盯盘**：
+  ```powershell
+  python run_paper_trade.py --market crypto --strategy grid --symbol BTCUSDT --loop --interval 60
+  ```

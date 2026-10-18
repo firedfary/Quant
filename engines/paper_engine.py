@@ -1,5 +1,5 @@
 """
-实盘模拟交易运行引擎
+实盘模拟交易运行引擎 (多市场支持)
 Live Paper Trading Engine (Real Market Quotes + SQLite Account + Risk Guard)
 """
 
@@ -7,12 +7,17 @@ import time
 import datetime
 from typing import Dict, List, Optional
 import pandas as pd
-from config import LOT_SIZE, DEFAULT_SYMBOLS
-from core.data_feed import DataFeed
+
+from config import get_market_config
 from core.account import Account
-from core.broker import SimulatedBroker
 from core.storage import DBManager
 from core.risk_manager import RiskManager
+from core.base_broker import BaseBroker
+from core.base_data_feed import BaseDataFeed
+from markets.ashare.broker import AshareBroker
+from markets.ashare.data_feed import AshareDataFeed
+from markets.crypto.broker import CryptoBroker
+from markets.crypto.data_feed import CryptoDataFeed
 from strategies.base import BaseStrategy, Signal
 from utils.logger import get_logger
 
@@ -22,20 +27,42 @@ class PaperTradingEngine:
     def __init__(
         self,
         strategy: BaseStrategy,
+        market: str = "ashare",
         db_path: Optional[str] = None
     ):
         self.strategy = strategy
-        self.db = DBManager(db_path) if db_path else DBManager()
-        self.account = Account(db=self.db)
-        self.broker = SimulatedBroker(account=self.account, db=self.db)
-        self.data_feed = DataFeed()
+        self.market = market.lower().strip()
+
+        # 加载市场配置
+        market_cfg = get_market_config(self.market)
+        self.currency = getattr(market_cfg, "CURRENCY", "CNY")
+        self.initial_cash = getattr(market_cfg, "INITIAL_CASH", 20000.0)
+        self.is_t_plus_1 = getattr(market_cfg, "T_PLUS_1", True)
+
+        default_db = getattr(market_cfg, "DB_PATH", None)
+        target_db = db_path or default_db
+
+        self.db = DBManager(db_path=target_db, initial_cash=self.initial_cash)
+        self.account = Account(db=self.db, initial_cash=self.initial_cash, currency=self.currency)
+
+        if self.market in ("crypto", "binance", "coin"):
+            self.broker: BaseBroker = CryptoBroker(account=self.account, db=self.db)
+            self.data_feed: BaseDataFeed = CryptoDataFeed()
+        else:
+            self.broker: BaseBroker = AshareBroker(account=self.account, db=self.db)
+            self.data_feed: BaseDataFeed = AshareDataFeed()
+
         self.risk_manager = RiskManager()
 
     def is_market_hours(self) -> bool:
-        """检查当前是否处于 A 股/场内基金开盘交易时间"""
+        """检查当前市场是否处于交易开盘时间"""
+        # 加密货币 7x24 小时永续开盘
+        if self.market in ("crypto", "binance", "coin"):
+            return True
+
+        # A 股 / 场内基金交易时段判定
         now = datetime.datetime.now()
-        # 周末不开盘 (0=周一, 6=周日)
-        if now.weekday() >= 5:
+        if now.weekday() >= 5:  # 周末休市
             return False
 
         t = now.time()
@@ -52,16 +79,16 @@ class PaperTradingEngine:
         4. 获取近期K线，送入策略生成信号
         5. 撮合成交并落盘数据库
         """
-        logger.info(f"==> 执行实盘模拟交易巡检 [{self.strategy.name}]...")
+        logger.info(f"==> 执行实盘模拟交易巡检 [{self.strategy.name}] (市场: {self.market.upper()})...")
         executed_orders = []
 
         # 确定需要监控的标的列表 (策略监控标的 + 账户现有持仓标的)
         active_symbols = list(set(self.strategy.symbols + list(self.account.positions.keys())))
         
-        # 1. 抓取最新毫秒级实时行情
+        # 1. 抓取最新行情
         quotes = self.data_feed.get_realtime_quotes(active_symbols)
         if not quotes:
-            logger.warning("未能拉取到实时行情，跳过本次巡检！")
+            logger.warning("未能拉取到有效实时行情，跳过本次巡检！")
             return []
 
         # 2. 更新持仓当前市值与账户状态
@@ -70,12 +97,12 @@ class PaperTradingEngine:
         # 3. 风控止损检查
         stop_triggers = self.risk_manager.check_stop_loss_triggers(self.account)
         for sym, reason in stop_triggers.items():
-            pos = self.account.positions[sym]
-            if pos.available_qty > 0:
+            pos = self.account.positions.get(sym)
+            if pos and pos.available_qty > 0:
                 logger.warning(f"🚨 [风控紧急止损触发] 标的 {sym} | 原因: {reason}")
                 order = self.broker.sell(
                     symbol=sym,
-                    price=quotes[sym]["price"],
+                    price=quotes.get(sym, {}).get("price", pos.current_price),
                     qty=pos.available_qty,
                     symbol_name=pos.symbol_name,
                     strategy_name="Risk_Stop_Loss",
@@ -84,15 +111,12 @@ class PaperTradingEngine:
                 if order:
                     executed_orders.append(order)
 
-        # 4. 准备策略所需的近期历史 K 线数据 (近 60 个交易日)
+        # 4. 准备策略所需的近期历史 K 线数据
         data_dict: Dict[str, pd.DataFrame] = {}
         for sym in self.strategy.symbols:
-            # 抓取日线数据
-            df = self.data_feed.get_history_bars(
-                symbol=sym,
-                start_date=(datetime.datetime.now() - datetime.timedelta(days=120)).strftime("%Y%m%d")
-            )
-            if not df.empty:
+            start_date_str = (datetime.datetime.now() - datetime.timedelta(days=120)).strftime("%Y%m%d")
+            df = self.data_feed.get_history_bars(symbol=sym, start_date=start_date_str)
+            if df is not None and not df.empty:
                 data_dict[sym] = df
 
         # 5. 策略生成交易信号
@@ -103,7 +127,7 @@ class PaperTradingEngine:
         )
 
         if not signals:
-            logger.info("当前各技术指标未触发新的买卖信号，保持现有仓位。")
+            logger.info("当前技术指标未触发新的买卖信号，保持现有仓位。")
         else:
             logger.info(f"策略生成 {len(signals)} 个交易信号！")
 
@@ -124,7 +148,7 @@ class PaperTradingEngine:
                 executed_orders.append(order)
 
         for sig in buy_signals:
-            # 下单前风控审查
+            # 下单前风控审查 (单标的持仓不超过60%)
             passed, msg = self.risk_manager.check_buy_order(self.account, sig.symbol, sig.price, sig.qty)
             if not passed:
                 logger.warning(f"风控拦截买单 [{sig.symbol}]: {msg}")
@@ -160,20 +184,23 @@ class PaperTradingEngine:
         return executed_orders
 
     def run_daily_settlement(self):
-        """执行每日收盘 T+1 结算"""
-        logger.info("执行每日收盘 T+1 结算...")
-        self.account.settle_daily_t_plus_1()
+        """执行每日收盘结算"""
+        if self.is_t_plus_1:
+            logger.info("执行每日收盘 T+1 结算...")
+            self.account.settle_daily_t_plus_1()
+        else:
+            logger.info("当前市场为 T+0 制度，无需日终解冻。")
 
     def start_loop(self, interval_seconds: int = 60):
         """盘中自动循环监控交易"""
-        logger.info(f"启动自动模拟盘交易引擎，轮询间隔: {interval_seconds} 秒 (按 Ctrl+C 退出)")
+        logger.info(f"启动自动模拟盘交易引擎 [{self.market.upper()}]，轮询间隔: {interval_seconds} 秒 (按 Ctrl+C 退出)")
         try:
             while True:
                 if self.is_market_hours():
                     self.run_step()
                 else:
                     now = datetime.datetime.now().strftime("%H:%M:%S")
-                    print(f"\r[{now}] 当前非 A 股开盘交易时段 (9:30-11:30, 13:00-15:00)，等待开盘...", end="", flush=True)
+                    print(f"\r[{now}] 当前非 A 股开盘交易时段，等待开盘...", end="", flush=True)
                 time.sleep(interval_seconds)
         except KeyboardInterrupt:
             logger.info("模拟盘自动巡检已停止。")

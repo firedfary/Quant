@@ -1,6 +1,6 @@
 """
 模拟账户与持仓管理模块
-Simulated Account & Position Tracker with T+1 Rules
+Simulated Account & Position Tracker with Multi-Market Rules (T+0/T+1, CNY/USDT)
 """
 
 import datetime
@@ -16,17 +16,17 @@ class Position:
         self,
         symbol: str,
         symbol_name: str,
-        total_qty: int = 0,
-        available_qty: int = 0,
+        total_qty: float = 0.0,
+        available_qty: float = 0.0,
         cost_price: float = 0.0,
         current_price: float = 0.0
     ):
         self.symbol = symbol
         self.symbol_name = symbol_name
-        self.total_qty = total_qty              # 总持仓股数
-        self.available_qty = available_qty      # T+1 可用卖出股数
-        self.cost_price = cost_price            # 持仓成本价
-        self.current_price = current_price      # 当前最新市价
+        self.total_qty = float(total_qty)              # 总持仓数 (支持整手或加密货币浮点数)
+        self.available_qty = float(available_qty)      # 可用卖出数
+        self.cost_price = float(cost_price)            # 持仓成本价
+        self.current_price = float(current_price)      # 当前最新市价
 
     @property
     def market_value(self) -> float:
@@ -49,8 +49,8 @@ class Position:
         return {
             "symbol": self.symbol,
             "symbol_name": self.symbol_name,
-            "total_qty": self.total_qty,
-            "available_qty": self.available_qty,
+            "total_qty": round(self.total_qty, 6) if not self.total_qty.is_integer() else int(self.total_qty),
+            "available_qty": round(self.available_qty, 6) if not self.available_qty.is_integer() else int(self.available_qty),
             "cost_price": round(self.cost_price, 4),
             "current_price": round(self.current_price, 4),
             "market_value": round(self.market_value, 2),
@@ -59,11 +59,17 @@ class Position:
         }
 
 class Account:
-    def __init__(self, db: DBManager):
+    def __init__(
+        self,
+        db: DBManager,
+        initial_cash: float = INITIAL_CASH,
+        currency: str = "CNY"
+    ):
         self.db = db
-        self.cash: float = INITIAL_CASH
+        self.currency = currency
+        self.cash: float = initial_cash
         self.frozen_cash: float = 0.0
-        self.initial_cash: float = INITIAL_CASH
+        self.initial_cash: float = initial_cash
         self.realized_pnl: float = 0.0
         self.positions: Dict[str, Position] = {}
         self.load()
@@ -71,10 +77,11 @@ class Account:
     def load(self):
         """从 SQLite 数据库加载账户及持仓状态"""
         acc_info = self.db.load_account()
-        self.cash = float(acc_info.get("cash", INITIAL_CASH))
-        self.frozen_cash = float(acc_info.get("frozen_cash", 0.0))
-        self.initial_cash = float(acc_info.get("initial_cash", INITIAL_CASH))
-        self.realized_pnl = float(acc_info.get("realized_pnl", 0.0))
+        if acc_info:
+            self.cash = float(acc_info.get("cash", self.initial_cash))
+            self.frozen_cash = float(acc_info.get("frozen_cash", 0.0))
+            self.initial_cash = float(acc_info.get("initial_cash", self.initial_cash))
+            self.realized_pnl = float(acc_info.get("realized_pnl", 0.0))
 
         pos_dict = self.db.load_positions()
         self.positions.clear()
@@ -82,8 +89,8 @@ class Account:
             self.positions[sym] = Position(
                 symbol=sym,
                 symbol_name=p.get("symbol_name", ""),
-                total_qty=int(p.get("total_qty", 0)),
-                available_qty=int(p.get("available_qty", 0)),
+                total_qty=float(p.get("total_qty", 0.0)),
+                available_qty=float(p.get("available_qty", 0.0)),
                 cost_price=float(p.get("cost_price", 0.0)),
                 current_price=float(p.get("current_price", 0.0))
             )
@@ -134,28 +141,31 @@ class Account:
         """日终结算：T+1 规则生效，当天买入的冻结可用股解冻，全部转为可卖"""
         for sym, pos in self.positions.items():
             if pos.available_qty < pos.total_qty:
-                logger.info(f"[{sym}] T+1日终结算: 可卖股数由 {pos.available_qty} 更新为 {pos.total_qty}")
+                logger.info(f"[{sym}] T+1日终结算: 可卖份额由 {pos.available_qty} 更新为 {pos.total_qty}")
                 pos.available_qty = pos.total_qty
         self.save()
 
     def print_summary(self):
         """打印格式化账户资产报告"""
-        print("\n" + "=" * 58)
-        print("          【 20,000 元 模拟量化交易账户总览 】")
-        print("=" * 58)
-        print(f" 初始本金:   {self.initial_cash:>12,.2f} 元    更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f" 可用现金:   {self.cash:>12,.2f} 元    持仓市值: {self.market_value:>12,.2f} 元")
-        print(f" 动态总资产: {self.total_equity:>12,.2f} 元    已实现盈亏: {self.realized_pnl:>10,.2f} 元")
+        curr = self.currency
+        print("\n" + "=" * 60)
+        print(f"          【 模拟量化交易账户总览 ({curr}) 】")
+        print("=" * 60)
+        print(f" 初始本金:   {self.initial_cash:>12,.2f} {curr}    更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f" 可用现金:   {self.cash:>12,.2f} {curr}    持仓市值: {self.market_value:>12,.2f} {curr}")
+        print(f" 动态总资产: {self.total_equity:>12,.2f} {curr}    已实现盈亏: {self.realized_pnl:>10,.2f} {curr}")
         
         pnl_color = "+" if self.total_pnl >= 0 else ""
-        print(f" 累计总盈亏: {pnl_color}{self.total_pnl:>11,.2f} 元    累计收益率: {pnl_color}{self.total_return_ratio * 100:.2f}%")
-        print("-" * 58)
+        print(f" 累计总盈亏: {pnl_color}{self.total_pnl:>11,.2f} {curr}    累计收益率: {pnl_color}{self.total_return_ratio * 100:.2f}%")
+        print("-" * 60)
         if not self.positions:
             print(" 当前空仓，暂无持仓标的。")
         else:
-            print(f" {'代码':<7} {'名称':<8} {'持仓数':>6} {'可用数':>6} {'成本价':>7} {'现价':>7} {'盈亏率':>8}")
+            print(f" {'代码':<9} {'名称':<8} {'持仓数':>9} {'可用数':>9} {'成本价':>8} {'现价':>8} {'盈亏率':>8}")
             for sym, pos in self.positions.items():
                 pnl_str = f"{pos.floating_pnl_ratio * 100:+.2f}%"
-                print(f" {pos.symbol:<7} {pos.symbol_name[:4]:<8} {pos.total_qty:>6} {pos.available_qty:>6} "
-                      f"{pos.cost_price:>7.3f} {pos.current_price:>7.3f} {pnl_str:>8}")
-        print("=" * 58 + "\n")
+                t_qty_str = f"{pos.total_qty:.4f}".rstrip("0").rstrip(".") if not pos.total_qty.is_integer() else str(int(pos.total_qty))
+                a_qty_str = f"{pos.available_qty:.4f}".rstrip("0").rstrip(".") if not pos.available_qty.is_integer() else str(int(pos.available_qty))
+                print(f" {pos.symbol:<9} {pos.symbol_name[:6]:<8} {t_qty_str:>9} {a_qty_str:>9} "
+                      f"{pos.cost_price:>8.3f} {pos.current_price:>8.3f} {pnl_str:>8}")
+        print("=" * 60 + "\n")

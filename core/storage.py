@@ -5,6 +5,7 @@ Storage & Database Manager for Account, Positions, Orders and Daily Snapshots
 
 import sqlite3
 import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from config import DB_PATH, INITIAL_CASH
 from utils.logger import get_logger
@@ -12,12 +13,15 @@ from utils.logger import get_logger
 logger = get_logger("Storage")
 
 class DBManager:
-    def __init__(self, db_path=DB_PATH):
+    def __init__(self, db_path=DB_PATH, initial_cash: float = INITIAL_CASH):
         self.db_path = str(db_path)
+        self.initial_cash = float(initial_cash)
         self._shared_conn = None
         if self.db_path == ":memory:":
             self._shared_conn = sqlite3.connect(":memory:")
             self._shared_conn.row_factory = sqlite3.Row
+        else:
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_tables()
 
     def get_connection(self) -> sqlite3.Connection:
@@ -45,13 +49,13 @@ class DBManager:
             )
             """)
 
-            # 2. 持仓明细表
+            # 2. 持仓明细表 (qty 改为 REAL 以兼容加密货币浮点数)
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 symbol TEXT PRIMARY KEY,
                 symbol_name TEXT,
-                total_qty INTEGER NOT NULL DEFAULT 0,
-                available_qty INTEGER NOT NULL DEFAULT 0,
+                total_qty REAL NOT NULL DEFAULT 0.0,
+                available_qty REAL NOT NULL DEFAULT 0.0,
                 cost_price REAL NOT NULL DEFAULT 0.0,
                 current_price REAL NOT NULL DEFAULT 0.0,
                 market_value REAL NOT NULL DEFAULT 0.0,
@@ -69,7 +73,7 @@ class DBManager:
                 action TEXT NOT NULL,
                 status TEXT NOT NULL,
                 deal_price REAL NOT NULL,
-                qty INTEGER NOT NULL,
+                qty REAL NOT NULL,
                 deal_amount REAL NOT NULL,
                 commission REAL NOT NULL,
                 stamp_tax REAL NOT NULL,
@@ -101,13 +105,14 @@ class DBManager:
                 cursor.execute("""
                 INSERT INTO account (id, initial_cash, cash, frozen_cash, total_equity, realized_pnl, updated_at)
                 VALUES (1, ?, ?, 0.0, ?, 0.0, ?)
-                """, (INITIAL_CASH, INITIAL_CASH, INITIAL_CASH, now_str))
-                logger.info(f"初始化模拟账户完成，初始资金: ¥{INITIAL_CASH:,.2f}")
+                """, (self.initial_cash, self.initial_cash, self.initial_cash, now_str))
+                logger.info(f"初始化模拟账户完成，初始资金: {self.initial_cash:,.2f}")
 
             conn.commit()
 
-    def reset_account(self, initial_cash: float = INITIAL_CASH):
+    def reset_account(self, initial_cash: Optional[float] = None):
         """重置模拟账户为初始状态"""
+        init_c = float(initial_cash) if initial_cash is not None else self.initial_cash
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -117,9 +122,9 @@ class DBManager:
             cursor.execute("""
             INSERT OR REPLACE INTO account (id, initial_cash, cash, frozen_cash, total_equity, realized_pnl, updated_at)
             VALUES (1, ?, ?, 0.0, ?, 0.0, ?)
-            """, (initial_cash, initial_cash, initial_cash, now_str))
+            """, (init_c, init_c, init_c, now_str))
             conn.commit()
-            logger.info(f"账户已重置！资金设为: ¥{initial_cash:,.2f}")
+            logger.info(f"账户已重置！资金设为: {init_c:,.2f}")
 
     def load_account(self) -> Dict[str, Any]:
         """获取账户当前状态"""
@@ -130,10 +135,10 @@ class DBManager:
             if row:
                 return dict(row)
             return {
-                "initial_cash": INITIAL_CASH,
-                "cash": INITIAL_CASH,
+                "initial_cash": self.initial_cash,
+                "cash": self.initial_cash,
                 "frozen_cash": 0.0,
-                "total_equity": INITIAL_CASH,
+                "total_equity": self.initial_cash,
                 "realized_pnl": 0.0,
                 "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -163,7 +168,8 @@ class DBManager:
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            if pos["total_qty"] <= 0:
+            t_qty = float(pos["total_qty"])
+            if t_qty <= 0:
                 cursor.execute("DELETE FROM positions WHERE symbol = ?", (pos["symbol"],))
             else:
                 cursor.execute("""
@@ -172,7 +178,7 @@ class DBManager:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     pos["symbol"], pos.get("symbol_name", ""),
-                    int(pos["total_qty"]), int(pos["available_qty"]),
+                    t_qty, float(pos["available_qty"]),
                     float(pos["cost_price"]), float(pos.get("current_price", pos["cost_price"])),
                     float(pos.get("market_value", 0.0)), float(pos.get("floating_pnl", 0.0)),
                     now_str
@@ -190,9 +196,9 @@ class DBManager:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 order_data["order_id"], order_data["symbol"], order_data.get("symbol_name", ""),
-                order_data["action"], order_data["status"], order_data["deal_price"],
-                order_data["qty"], order_data["deal_amount"], order_data["commission"],
-                order_data["stamp_tax"], order_data["transfer_fee"], order_data["total_cost"],
+                order_data["action"], order_data["status"], float(order_data["deal_price"]),
+                float(order_data["qty"]), float(order_data["deal_amount"]), float(order_data["commission"]),
+                float(order_data["stamp_tax"]), float(order_data["transfer_fee"]), float(order_data["total_cost"]),
                 order_data.get("strategy_name", ""), order_data.get("remark", ""),
                 order_data.get("created_at", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             ))

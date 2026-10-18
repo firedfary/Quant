@@ -20,7 +20,7 @@ class RiskManager:
         self.stop_loss_ratio = stop_loss_ratio
         self.max_account_drawdown = max_account_drawdown
 
-    def check_buy_order(self, account: Account, symbol: str, price: float, qty: int) -> Tuple[bool, str]:
+    def check_buy_order(self, account: Account, symbol: str, price: float, qty: float) -> Tuple[bool, str]:
         """
         下单前风控检查：
         1. 检查单标的持仓市值是否会突破上限
