@@ -48,16 +48,41 @@ class PaperTradingEngine:
         if self.market in ("crypto", "binance", "coin"):
             self.broker: BaseBroker = CryptoBroker(account=self.account, db=self.db)
             self.data_feed: BaseDataFeed = CryptoDataFeed()
+        elif self.market in ("fx_toy", "fx", "toy"):
+            from markets.fx_toy.broker import FxToyBroker
+            from markets.fx_toy.data_feed import FxToyDataFeed
+            self.data_feed = FxToyDataFeed()
+            self.broker = FxToyBroker(account=self.account, db=self.db, runner=self.data_feed.runner)
+            
+            # 外汇小游戏每次启动均为全新对局，优先从页面读取初始资金并自动创建全新账户
+            init_cash = self.initial_cash
+            try:
+                import asyncio
+                st = asyncio.run(self.data_feed.runner.get_state())
+                cash_txt = st.get("cash", "")
+                if cash_txt:
+                    c_val = float(cash_txt.replace("$", "").replace(",", "").replace("+", "").strip())
+                    if c_val > 0:
+                        init_cash = c_val
+            except Exception:
+                pass
+            self.reset_account(initial_cash=init_cash)
         else:
             self.broker: BaseBroker = AshareBroker(account=self.account, db=self.db)
             self.data_feed: BaseDataFeed = AshareDataFeed()
 
         self.risk_manager = RiskManager()
 
+    def reset_account(self, initial_cash: Optional[float] = None):
+        """重置当前模拟账户为全新对局状态，清空历史持仓与订单记录"""
+        init_c = initial_cash or self.initial_cash
+        self.account.reset(init_c)
+        logger.info(f"[{self.market.upper()}] 已自动创建全新对局账户 (初始资金: {self.account.cash:,.2f} {self.currency})")
+
     def is_market_hours(self) -> bool:
         """检查当前市场是否处于交易开盘时间"""
-        # 加密货币 7x24 小时永续开盘
-        if self.market in ("crypto", "binance", "coin"):
+        # 加密货币及外汇小游戏 7x24 小时永续开盘
+        if self.market in ("crypto", "binance", "coin", "fx_toy", "fx", "toy"):
             return True
 
         # A 股 / 场内基金交易时段判定

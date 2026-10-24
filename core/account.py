@@ -74,6 +74,16 @@ class Account:
         self.positions: Dict[str, Position] = {}
         self.load()
 
+    def get_position(self, symbol: str) -> Optional[Position]:
+        """获取指定标的的持仓对象，若不存在则返回 None"""
+        return self.positions.get(symbol)
+
+    def reset(self, initial_cash: Optional[float] = None):
+        """重置当前账户状态为全新账户，并清空底层数据库中的持仓与历史记录"""
+        init_c = initial_cash or self.initial_cash
+        self.db.reset_account(init_c)
+        self.load()
+
     def load(self):
         """从 SQLite 数据库加载账户及持仓状态"""
         acc_info = self.db.load_account()

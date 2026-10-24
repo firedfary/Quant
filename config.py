@@ -79,12 +79,15 @@ def is_etf(symbol: str) -> bool:
 def get_market_config(market_name: str = "ashare"):
     """
     根据市场名称获取对应市场的配置对象
-    :param market_name: 'ashare' 或 'crypto'
+    :param market_name: 'ashare', 'crypto', 或 'fx_toy'
     """
     market = str(market_name).lower().strip()
     if market in ("crypto", "binance", "coin"):
         from markets.crypto import config as crypto_cfg
         return crypto_cfg
+    elif market in ("fx_toy", "fx", "toy", "fx-simple"):
+        from markets.fx_toy import config as fx_cfg
+        return fx_cfg
     else:
         from markets.ashare import config as ashare_cfg
         return ashare_cfg
